@@ -1,25 +1,45 @@
-#include <vmlinux.h>
-#include <vmlinux-x86.h>
-#include "bpf/bpf_helpers.h"
-#include "bpf/bpf_core_read.h"
-#include "bpf/bpf_tracing.h"
-#include "bpf/bpf_endian.h"
-#include "bpf/bpf_ipv6.h"
+#include "vmlinux.h"
+#include "vmlinux-x86.h"
+#include "bpf_helpers.h"
+#include "bpf_core_read.h"
+#include "bpf_tracing.h"
+#include "bpf_endian.h"
+#include "bpf_ipv6.h"
 
 char LICENSE[] SEC("license") = "GPL";
 
+// 资源版本结构，类似 K8s ResourceVersion
+struct resource_version
+{
+    __u64 version;   // 全局递增的版本号
+    __u64 timestamp; // 时间戳，用于排序
+};
+
 // 事件类型定义
-#define EVENT_TYPE_ADD 1    // 程序加载
-#define EVENT_TYPE_UPDATE 2 // 程序更新
-#define EVENT_TYPE_DELETE 3 // 程序卸载
+#define EVENT_TYPE_ADD 1        // 程序加载
+#define EVENT_TYPE_UPDATE 2     // 程序更新
+#define EVENT_TYPE_DELETE 3     // 程序卸载
+#define EVENT_TYPE_MAP_ADD 4    // Map 创建
+#define EVENT_TYPE_MAP_UPDATE 5 // Map 更新
+#define EVENT_TYPE_MAP_DELETE 6 // Map 删除
+
+// 全局版本号管理
+struct
+{
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} global_version SEC(".maps");
 
 // 程序状态结构
 struct bpf_prog_state
 {
-    __u32 prog_id;   // 程序ID
-    __u64 load_time; // 加载时间
-    char comm[16];   // 加载程序的进程名
-    __u32 pid;       // 加载程序的进程ID
+    __u32 prog_id;              // 程序ID
+    __u64 load_time;            // 加载时间
+    char comm[16];              // 加载程序的进程名
+    __u32 pid;                  // 加载程序的进程ID
+    struct resource_version rv; // 资源版本
 };
 
 struct bpf_map_state
@@ -29,17 +49,31 @@ struct bpf_map_state
     char comm[16];
     __u32 pid;
     int fd;
+    struct resource_version rv; // 资源版本
 };
 
 struct bpf_prog_state *unused_bpf_prog_state __attribute__((unused));
-
+struct bpf_map_state *unused_bpf_map_state __attribute__((unused));
+// 事件记录结构，用于 ringbuffer
 struct bpf_prog_event
 {
     __u32 event_type;            // 事件类型(ADD/UPDATE/DELETE)
     struct bpf_prog_state state; // 程序状态
+    struct resource_version rv;  // 资源版本号
 };
 
-// 定义 ringbuffer map
+struct bpf_prog_event *unused_bpf_prog_event __attribute__((unused));
+
+struct bpf_map_event
+{
+    __u32 event_type;           // 事件类型(MAP_ADD/MAP_UPDATE/MAP_DELETE)
+    struct bpf_map_state state; // Map状态
+    struct resource_version rv; // 资源版本号
+};
+
+struct bpf_map_event *unused_bpf_map_event __attribute__((unused));
+
+// 定义 ringbuffer map - 用于所有事件的传输
 struct
 {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -80,7 +114,27 @@ struct
     __type(value, struct bpf_map_state);
 } pid_map_states SEC(".maps");
 
-// 辅助函数: 发送事件到 ringbuffer
+// 辅助函数：获取并递增全局版本号
+static __always_inline __u64 get_next_version(void)
+{
+    __u32 key = 0;
+    __u64 *version = bpf_map_lookup_elem(&global_version, &key);
+    __u64 new_version = 1;
+
+    if (version)
+    {
+        new_version = *version + 1;
+        bpf_map_update_elem(&global_version, &key, &new_version, BPF_ANY);
+    }
+    else
+    {
+        bpf_map_update_elem(&global_version, &key, &new_version, BPF_ANY);
+    }
+
+    return new_version;
+}
+
+// 辅助函数: 发送 BPF 程序事件到 ringbuffer
 static int send_event(__u32 event_type, struct bpf_prog_state *state)
 {
     struct bpf_prog_event *event;
@@ -92,9 +146,40 @@ static int send_event(__u32 event_type, struct bpf_prog_state *state)
         return -1;
     }
 
+    // 更新资源版本
+    state->rv.version = get_next_version();
+    state->rv.timestamp = bpf_ktime_get_ns();
+
     // 填充事件信息
     event->event_type = event_type;
     __builtin_memcpy(&event->state, state, sizeof(*state));
+    event->rv = state->rv;
+
+    // 提交事件
+    bpf_ringbuf_submit(event, 0);
+    return 0;
+}
+
+// 辅助函数: 发送 Map 事件到 ringbuffer
+static int send_map_event(__u32 event_type, struct bpf_map_state *state)
+{
+    struct bpf_map_event *event;
+
+    // 从 ringbuffer 分配内存
+    event = bpf_ringbuf_reserve(&events, sizeof(*event), 0);
+    if (!event)
+    {
+        return -1;
+    }
+
+    // 更新资源版本
+    state->rv.version = get_next_version();
+    state->rv.timestamp = bpf_ktime_get_ns();
+
+    // 填充事件信息
+    event->event_type = event_type;
+    __builtin_memcpy(&event->state, state, sizeof(*state));
+    event->rv = state->rv;
 
     // 提交事件
     bpf_ringbuf_submit(event, 0);
@@ -117,6 +202,9 @@ int BPF_KPROBE(trace_bpf_prog_load)
     state.pid = bpf_get_current_pid_tgid() >> 32;
     bpf_get_current_comm(&state.comm, sizeof(state.comm));
     state.load_time = bpf_ktime_get_ns();
+
+    // 初始化资源版本
+    state.rv.timestamp = state.load_time;
 
     // 获取 aux 指针以读取 id
     struct bpf_prog_aux *aux;
@@ -144,23 +232,25 @@ int BPF_KPROBE(trace_bpf_prog_load)
     if (existing)
     {
         event_type = EVENT_TYPE_UPDATE;
+        // 保留已有的资源版本信息，但将获取新版本
+        state.rv.version = existing->rv.version;
     }
     else
     {
         event_type = EVENT_TYPE_ADD;
     }
 
+    // 发送事件到ringbuffer
+    send_event(event_type, &state);
+
     // 更新程序状态map
     bpf_map_update_elem(&prog_states, &state.prog_id, &state, BPF_ANY);
     bpf_map_update_elem(&pid_func_name_states, &key, &state, BPF_ANY);
 
-    // 发送事件到ringbuffer
-    send_event(event_type, &state);
-
     // 打印基本信息
-    bpf_printk("BPF program %s: id=%u pid=%d comm=%s func_name=%s\n",
+    bpf_printk("BPF program %s: id=%u pid=%d comm=%s func_name=%s rv=%llu\n",
                event_type == EVENT_TYPE_ADD ? "loaded" : "updated",
-               state.prog_id, state.pid, state.comm, func_name);
+               state.prog_id, state.pid, state.comm, func_name, state.rv.version);
 
     return 0;
 }
@@ -205,7 +295,7 @@ int BPF_KPROBE(trace_bpf_prog_release)
     state = bpf_map_lookup_elem(&pid_func_name_states, &key);
     if (!state)
     {
-        bpf_printk("BPF program deleted (unknown load): id=%u\n", state->prog_id);
+        bpf_printk("BPF program deleted (unknown load): pid=%u comm=%s\n", pid, comm);
         return 0;
     }
 
@@ -236,7 +326,7 @@ int BPF_KPROBE(trace_bpf_prog_release)
         bpf_map_delete_elem(&prog_states, &state->prog_id);
         bpf_map_delete_elem(&pid_func_name_states, &key);
 
-        bpf_printk("BPF program released: id=%u\n", state->prog_id);
+        bpf_printk("BPF program released: id=%u rv=%llu\n", state->prog_id, updated_state.rv.version);
     }
 
     return 0;
@@ -287,12 +377,34 @@ int BPF_KPROBE(trace_kprobe_map_create)
     struct bpf_map_state map_state = {0};
     map_state.map_id = bpf_attr.map_type;
     map_state.load_time = bpf_ktime_get_ns();
+    map_state.rv.timestamp = map_state.load_time;
     __builtin_memcpy(map_state.comm, comm, sizeof(comm));
     map_state.pid = pid;
 
+    // 检查是否存在，确定是ADD还是UPDATE
+    struct bpf_map_state *existing;
+    existing = bpf_map_lookup_elem(&pid_map_states, &key);
+
+    __u32 event_type;
+    if (existing)
+    {
+        event_type = EVENT_TYPE_MAP_UPDATE;
+        // 保留已有的资源版本信息，但将获取新版本
+        map_state.rv.version = existing->rv.version;
+    }
+    else
+    {
+        event_type = EVENT_TYPE_MAP_ADD;
+    }
+
+    // 发送事件
+    send_map_event(event_type, &map_state);
+
+    // 更新状态
     bpf_map_update_elem(&pid_map_states, &key, &map_state, BPF_ANY);
 
-    bpf_printk("map_create: pid=%u comm=%s map_name=%s\n", pid, comm, map_name);
+    bpf_printk("map_create: pid=%u comm=%s map_name=%s rv=%llu\n",
+               pid, comm, map_name, map_state.rv.version);
 
     return 0;
 }
@@ -338,9 +450,17 @@ int BPF_KPROBE(trace_bpf_map_release)
         return 0;
     }
 
+    // 制作副本用于发送事件
+    struct bpf_map_state state_copy = *map_state;
+
+    // 发送删除事件
+    send_map_event(EVENT_TYPE_MAP_DELETE, &state_copy);
+
+    // 从map中删除状态
     bpf_map_delete_elem(&pid_map_states, &key);
 
-    bpf_printk("BPF map released: pid=%u comm=%s map_id=%u map_name=%s\n", pid, comm, map_id, map_name);
+    bpf_printk("BPF map released: pid=%u comm=%s map_id=%u map_name=%s rv=%llu\n",
+               pid, comm, map_id, map_name, state_copy.rv.version);
 
     return 0;
 }
