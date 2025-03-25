@@ -1,10 +1,10 @@
 #include "vmlinux.h"
 #include "vmlinux-x86.h"
-#include "bpf_helpers.h"
-#include "bpf_core_read.h"
-#include "bpf_tracing.h"
-#include "bpf_endian.h"
-#include "bpf_ipv6.h"
+#include "bpf/bpf_helpers.h"
+#include "bpf/bpf_core_read.h"
+#include "bpf/bpf_tracing.h"
+#include "bpf/bpf_endian.h"
+#include "bpf/bpf_ipv6.h"
 
 char LICENSE[] SEC("license") = "GPL";
 

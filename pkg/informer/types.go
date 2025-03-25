@@ -58,6 +58,8 @@ type EventRecord struct {
 type Event struct {
 	Type         string          `json:"type"`             // 事件类型：ADDED, MODIFIED, DELETED
 	ResourceType string          `json:"resource_type"`    // 资源类型：BPFProgram, BPFMap
+	Pid          uint32          `json:"pid"`              // 进程ID
+	FuncName     string          `json:"func_name"`        // 函数名
 	ResourceID   uint32          `json:"resource_id"`      // 资源ID
 	RV           ResourceVersion `json:"resource_version"` // 资源版本
 	Object       interface{}     `json:"object"`           // 对象数据：BPFProgInfo 或 BPFMapInfo

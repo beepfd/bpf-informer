@@ -70,6 +70,13 @@ type BPFInformer struct {
 	l             *loader.BPFLoader
 }
 
+type SkipHandler struct {
+}
+
+func (h *SkipHandler) HandleEvent(ctx *meta.UserContext, data *meta.ReceivedEventData) error {
+	return nil
+}
+
 // NewBPFInformer 创建新的 BPF Informer
 func NewBPFInformer(objectPath string, logger *zap.Logger) (*BPFInformer, error) {
 	// 提高 rlimit
@@ -81,7 +88,30 @@ func NewBPFInformer(objectPath string, logger *zap.Logger) (*BPFInformer, error)
 		ObjectPath:  objectPath,
 		Logger:      logger,
 		PollTimeout: 100 * time.Millisecond,
-		Properties:  meta.Properties{},
+		Properties: meta.Properties{
+			Maps: map[string]*meta.Map{
+				"global_version": {
+					Name:          "global_version",
+					ExportHandler: &SkipHandler{},
+				},
+				"events": {
+					Name:          "events",
+					ExportHandler: &SkipHandler{},
+				},
+				"prog_states": {
+					Name:          "prog_states",
+					ExportHandler: &SkipHandler{},
+				},
+				"pid_map_states": {
+					Name:          "pid_map_states",
+					ExportHandler: &SkipHandler{},
+				},
+				"pid_func_name_states": {
+					Name:          "map_states",
+					ExportHandler: &SkipHandler{},
+				},
+			},
+		},
 	}
 	l := loader.NewBPFLoader(config)
 
@@ -378,6 +408,8 @@ func (i *BPFInformer) handleProgramEvent(eventType uint32, data []byte) error {
 	e := Event{
 		Type:         eventTypeStr,
 		ResourceType: ResourceTypeProgram,
+		Pid:          event.State.Pid,
+		FuncName:     convertInt8ToString(event.State.Comm[:]),
 		ResourceID:   event.State.ProgId,
 		RV:           ResourceVersion{Version: event.Rv.Version, Timestamp: event.Rv.Timestamp},
 		Object:       progInfo,
@@ -461,7 +493,9 @@ func (i *BPFInformer) handleMapEvent(eventType uint32, data []byte) error {
 	e := Event{
 		Type:         eventTypeStr,
 		ResourceType: ResourceTypeMap,
-		ResourceID:   event.State.Pid,
+		Pid:          event.State.Pid,
+		FuncName:     convertInt8ToString(event.State.Comm[:]),
+		ResourceID:   event.State.MapId,
 		RV:           ResourceVersion{Version: event.Rv.Version, Timestamp: event.Rv.Timestamp},
 		Object:       mapInfo,
 	}
