@@ -40,6 +40,7 @@ type BPFMapInfo struct {
 	MapID     uint32          `json:"map_id"`
 	LoadTime  uint64          `json:"load_time"`
 	Comm      string          `json:"comm"`
+	MapName   string          `json:"map_name"`
 	PID       uint32          `json:"pid"`
 	FD        int             `json:"fd"`
 	RV        ResourceVersion `json:"resource_version"`

@@ -15,6 +15,7 @@ import (
 
 	loader "github.com/cen-ngc5139/BeePF/loader/lib/src/cli"
 	"github.com/cen-ngc5139/BeePF/loader/lib/src/meta"
+	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/cilium/ebpf/rlimit"
 	"go.uber.org/zap"
@@ -106,7 +107,7 @@ func NewBPFInformer(objectPath string, logger *zap.Logger) (*BPFInformer, error)
 					Name:          "pid_map_states",
 					ExportHandler: &SkipHandler{},
 				},
-				"pid_func_name_states": {
+				"pid_prog_states": {
 					Name:          "map_states",
 					ExportHandler: &SkipHandler{},
 				},
@@ -334,6 +335,7 @@ func (i *BPFInformer) processEvents() {
 			// 处理事件
 			if err := i.handleEvent(record.RawSample); err != nil {
 				i.logger.Error("Error handling event", zap.Error(err))
+				continue
 			}
 		}
 	}
@@ -453,11 +455,21 @@ func (i *BPFInformer) handleMapEvent(eventType uint32, data []byte) error {
 	mapInfo := BPFMapInfo{
 		MapID:     event.State.MapId,
 		LoadTime:  event.State.LoadTime,
+		MapName:   convertInt8ToString(event.State.MapName[:]),
 		Comm:      convertInt8ToString(event.State.Comm[:]),
 		PID:       event.State.Pid,
 		FD:        int(event.State.Fd),
 		RV:        ResourceVersion{Version: event.Rv.Version, Timestamp: event.Rv.Timestamp},
 		UpdatedAt: now,
+	}
+
+	if mapInfo.FD > 0 && mapInfo.MapID == 0 {
+		mapID, err := getMapIDFromFD(mapInfo.FD)
+		if err != nil {
+			i.logger.Error("Failed to get map id from fd", zap.Error(err))
+		}
+
+		mapInfo.MapID = mapID
 	}
 
 	var eventTypeStr string
@@ -493,9 +505,9 @@ func (i *BPFInformer) handleMapEvent(eventType uint32, data []byte) error {
 	e := Event{
 		Type:         eventTypeStr,
 		ResourceType: ResourceTypeMap,
-		Pid:          event.State.Pid,
-		FuncName:     convertInt8ToString(event.State.Comm[:]),
-		ResourceID:   event.State.MapId,
+		Pid:          mapInfo.PID,
+		FuncName:     mapInfo.MapName,
+		ResourceID:   mapInfo.MapID,
 		RV:           ResourceVersion{Version: event.Rv.Version, Timestamp: event.Rv.Timestamp},
 		Object:       mapInfo,
 	}
@@ -514,4 +526,23 @@ func (i *BPFInformer) handleMapEvent(eventType uint32, data []byte) error {
 	}
 
 	return nil
+}
+
+func getMapIDFromFD(fd int) (uint32, error) {
+	mapFromFD, err := ebpf.NewMapFromFD(fd)
+	if err != nil {
+		return 0, fmt.Errorf("error creating map info: %w", err)
+	}
+
+	info, err := mapFromFD.Info()
+	if err != nil {
+		return 0, fmt.Errorf("error getting map info: %w", err)
+	}
+
+	mapID, ok := info.ID()
+	if !ok {
+		return 0, fmt.Errorf("error getting map id: %w", err)
+	}
+
+	return uint32(mapID), nil
 }

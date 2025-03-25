@@ -46,6 +46,7 @@ struct bpf_map_state
 {
     __u32 map_id;
     __u64 load_time;
+    char map_name[16];
     char comm[16];
     __u32 pid;
     int fd;
@@ -103,7 +104,7 @@ struct
     __uint(max_entries, 10000);
     __type(key, struct pid_func_key);
     __type(value, struct bpf_prog_state);
-} pid_func_name_states SEC(".maps");
+} pid_prog_states SEC(".maps");
 
 // 定义 map_id + comm 的映射
 struct
@@ -113,6 +114,15 @@ struct
     __type(key, struct pid_func_key);
     __type(value, struct bpf_map_state);
 } pid_map_states SEC(".maps");
+
+// 创建临时存储表记录 map_create 调用信息
+struct
+{
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __type(key, __u64); // 使用 pid + tgid 作为键
+    __type(value, struct bpf_map_state);
+} map_create_calls SEC(".maps");
 
 // 辅助函数：获取并递增全局版本号
 static __always_inline __u64 get_next_version(void)
@@ -226,7 +236,7 @@ int BPF_KPROBE(trace_bpf_prog_load)
 
     // 检查是否存在，确定是ADD还是UPDATE
     struct bpf_prog_state *existing;
-    existing = bpf_map_lookup_elem(&pid_func_name_states, &key);
+    existing = bpf_map_lookup_elem(&pid_prog_states, &key);
 
     __u32 event_type;
     if (existing)
@@ -245,7 +255,7 @@ int BPF_KPROBE(trace_bpf_prog_load)
 
     // 更新程序状态map
     bpf_map_update_elem(&prog_states, &state.prog_id, &state, BPF_ANY);
-    bpf_map_update_elem(&pid_func_name_states, &key, &state, BPF_ANY);
+    bpf_map_update_elem(&pid_prog_states, &key, &state, BPF_ANY);
 
     // 打印基本信息
     bpf_printk("BPF program %s: id=%u pid=%d comm=%s func_name=%s rv=%llu\n",
@@ -292,7 +302,7 @@ int BPF_KPROBE(trace_bpf_prog_release)
     struct pid_func_key key = {0};
     key.pid = pid;
     __builtin_memcpy(key.func_name, func_name, sizeof(func_name));
-    state = bpf_map_lookup_elem(&pid_func_name_states, &key);
+    state = bpf_map_lookup_elem(&pid_prog_states, &key);
     if (!state)
     {
         bpf_printk("BPF program deleted (unknown load): pid=%u comm=%s\n", pid, comm);
@@ -324,7 +334,7 @@ int BPF_KPROBE(trace_bpf_prog_release)
 
         // 从map中删除
         bpf_map_delete_elem(&prog_states, &state->prog_id);
-        bpf_map_delete_elem(&pid_func_name_states, &key);
+        bpf_map_delete_elem(&pid_prog_states, &key);
 
         bpf_printk("BPF program released: id=%u rv=%llu\n", state->prog_id, updated_state.rv.version);
     }
@@ -353,7 +363,8 @@ struct bpf_map_attr
 SEC("kprobe/map_create")
 int BPF_KPROBE(trace_kprobe_map_create)
 {
-    __u32 pid = bpf_get_current_pid_tgid() >> 32;
+    __u64 pid_tgid = bpf_get_current_pid_tgid();
+    __u32 pid = pid_tgid >> 32;
     char comm[16];
     bpf_get_current_comm(&comm, sizeof(comm));
 
@@ -370,16 +381,46 @@ int BPF_KPROBE(trace_kprobe_map_create)
     char map_name[16];
     bpf_probe_read_kernel(&map_name, sizeof(map_name), &bpf_attr.map_name);
 
-    struct pid_func_key key = {0};
-    key.pid = pid;
-    __builtin_memcpy(key.func_name, map_name, sizeof(map_name));
-
+    // 创建 map 状态结构
     struct bpf_map_state map_state = {0};
-    map_state.map_id = bpf_attr.map_type;
     map_state.load_time = bpf_ktime_get_ns();
     map_state.rv.timestamp = map_state.load_time;
     __builtin_memcpy(map_state.comm, comm, sizeof(comm));
     map_state.pid = pid;
+    __builtin_memcpy(map_state.map_name, map_name, sizeof(map_name));
+
+    // 存储调用信息，以便在 kretprobe 中使用
+    bpf_map_update_elem(&map_create_calls, &pid_tgid, &map_state, BPF_ANY);
+
+    bpf_printk("map_create: pid=%u comm=%s map_name=%s rv=%llu\n",
+               pid, comm, map_name, map_state.rv.version);
+
+    return 0;
+}
+
+SEC("kretprobe/map_create")
+int BPF_KRETPROBE(trace_kretprobe_map_create, int fd)
+{
+    // 获取当前进程标识
+    __u64 pid_tgid = bpf_get_current_pid_tgid();
+    __u32 pid = pid_tgid >> 32;
+
+    // 查找对应的调用信息
+    struct bpf_map_state *map_state = bpf_map_lookup_elem(&map_create_calls, &pid_tgid);
+    if (!map_state || fd < 0)
+    {
+        bpf_printk("fail to get map_create_info: pid=%u fd=%d\n", pid, fd);
+        // 清理临时存储
+        bpf_map_delete_elem(&map_create_calls, &pid_tgid);
+        return 0;
+    }
+
+    map_state->fd = fd;
+
+    // 创建 map 状态结构 key
+    struct pid_func_key key = {0};
+    key.pid = pid;
+    __builtin_memcpy(key.func_name, map_state->map_name, sizeof(map_state->map_name));
 
     // 检查是否存在，确定是ADD还是UPDATE
     struct bpf_map_state *existing;
@@ -390,7 +431,7 @@ int BPF_KPROBE(trace_kprobe_map_create)
     {
         event_type = EVENT_TYPE_MAP_UPDATE;
         // 保留已有的资源版本信息，但将获取新版本
-        map_state.rv.version = existing->rv.version;
+        map_state->rv.version = existing->rv.version;
     }
     else
     {
@@ -398,13 +439,12 @@ int BPF_KPROBE(trace_kprobe_map_create)
     }
 
     // 发送事件
-    send_map_event(event_type, &map_state);
+    send_map_event(event_type, map_state);
 
     // 更新状态
-    bpf_map_update_elem(&pid_map_states, &key, &map_state, BPF_ANY);
+    bpf_map_update_elem(&pid_map_states, &key, map_state, BPF_ANY);
 
-    bpf_printk("map_create: pid=%u comm=%s map_name=%s rv=%llu\n",
-               pid, comm, map_name, map_state.rv.version);
+    bpf_printk("map_create: pid=%u fd=%d map_name=%s \n", pid, fd, map_state->map_name);
 
     return 0;
 }
@@ -451,16 +491,16 @@ int BPF_KPROBE(trace_bpf_map_release)
     }
 
     // 制作副本用于发送事件
-    struct bpf_map_state state_copy = *map_state;
+    struct bpf_map_state *state_copy = map_state;
 
     // 发送删除事件
-    send_map_event(EVENT_TYPE_MAP_DELETE, &state_copy);
+    send_map_event(EVENT_TYPE_MAP_DELETE, state_copy);
 
     // 从map中删除状态
     bpf_map_delete_elem(&pid_map_states, &key);
 
     bpf_printk("BPF map released: pid=%u comm=%s map_id=%u map_name=%s rv=%llu\n",
-               pid, comm, map_id, map_name, state_copy.rv.version);
+               pid, comm, map_id, map_name, state_copy->rv.version);
 
     return 0;
 }
