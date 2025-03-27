@@ -29,6 +29,7 @@ type BPFProgInfo struct {
 	ProgID    uint32          `json:"prog_id"`
 	LoadTime  uint64          `json:"load_time"`
 	Comm      string          `json:"comm"`
+	FuncName  string          `json:"func_name"`
 	PID       uint32          `json:"pid"`
 	RV        ResourceVersion `json:"resource_version"`
 	CreatedAt time.Time       `json:"created_at"`
@@ -60,6 +61,7 @@ type Event struct {
 	Type         string          `json:"type"`             // 事件类型：ADDED, MODIFIED, DELETED
 	ResourceType string          `json:"resource_type"`    // 资源类型：BPFProgram, BPFMap
 	Pid          uint32          `json:"pid"`              // 进程ID
+	Comm         string          `json:"comm"`             // 进程名
 	FuncName     string          `json:"func_name"`        // 函数名
 	ResourceID   uint32          `json:"resource_id"`      // 资源ID
 	RV           ResourceVersion `json:"resource_version"` // 资源版本

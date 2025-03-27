@@ -37,6 +37,7 @@ struct bpf_prog_state
 {
     __u32 prog_id;              // 程序ID
     __u64 load_time;            // 加载时间
+    char func_name[16];         // 加载程序的函数名
     char comm[16];              // 加载程序的进程名
     __u32 pid;                  // 加载程序的进程ID
     struct resource_version rv; // 资源版本
@@ -244,6 +245,7 @@ int BPF_KPROBE(trace_bpf_prog_load)
 
     char func_name[16];
     bpf_probe_read_kernel(&func_name, sizeof(func_name), &aux->name);
+    __builtin_memcpy(state.func_name, func_name, sizeof(func_name));
 
     struct pid_func_key key = {0};
     key.pid = state.pid;
@@ -473,24 +475,8 @@ int BPF_KRETPROBE(trace_kretprobe_map_create, int fd)
     key.pid = pid;
     __builtin_memcpy(key.func_name, map_state->map_name, sizeof(map_state->map_name));
 
-    // 检查是否存在，确定是ADD还是UPDATE
-    struct bpf_map_state *existing;
-    existing = bpf_map_lookup_elem(&pid_map_states, &key);
-
-    __u32 event_type;
-    if (existing)
-    {
-        event_type = EVENT_TYPE_MAP_UPDATE;
-        // 保留已有的资源版本信息，但将获取新版本
-        map_state->rv.version = existing->rv.version;
-    }
-    else
-    {
-        event_type = EVENT_TYPE_MAP_ADD;
-    }
-
     // 发送事件
-    send_map_event(event_type, map_state);
+    send_map_event(EVENT_TYPE_MAP_ADD, map_state);
 
     // 更新状态
     bpf_map_update_elem(&pid_map_states, &key, map_state, BPF_ANY);

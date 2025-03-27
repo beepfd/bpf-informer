@@ -375,6 +375,7 @@ func (i *BPFInformer) handleProgramEvent(eventType uint32, data []byte) error {
 		ProgID:    event.State.ProgId,
 		LoadTime:  event.State.LoadTime,
 		Comm:      convertInt8ToString(event.State.Comm[:]),
+		FuncName:  convertInt8ToString(event.State.FuncName[:]),
 		PID:       event.State.Pid,
 		RV:        ResourceVersion{Version: event.Rv.Version, Timestamp: event.Rv.Timestamp},
 		UpdatedAt: now,
@@ -414,7 +415,8 @@ func (i *BPFInformer) handleProgramEvent(eventType uint32, data []byte) error {
 		Type:         eventTypeStr,
 		ResourceType: ResourceTypeProgram,
 		Pid:          event.State.Pid,
-		FuncName:     convertInt8ToString(event.State.Comm[:]),
+		Comm:         convertInt8ToString(event.State.Comm[:]),
+		FuncName:     convertInt8ToString(event.State.FuncName[:]),
 		ResourceID:   event.State.ProgId,
 		RV:           ResourceVersion{Version: event.Rv.Version, Timestamp: event.Rv.Timestamp},
 		Object:       progInfo,
@@ -496,7 +498,7 @@ func (i *BPFInformer) handleMapEvent(eventType uint32, data []byte) error {
 	}
 
 	if mapInfo.FD > 0 && mapInfo.MapID == 0 {
-		mapID, err := getMapIDFromFD(mapInfo.FD)
+		mapID, err := GetMapIDByFD(mapInfo.FD)
 		if err != nil {
 			i.logger.Error("Failed to get map id from fd", zap.Int("fd", mapInfo.FD), zap.Error(err))
 		}
@@ -509,6 +511,7 @@ func (i *BPFInformer) handleMapEvent(eventType uint32, data []byte) error {
 		Type:         eventTypeStr,
 		ResourceType: ResourceTypeMap,
 		Pid:          mapInfo.PID,
+		Comm:         mapInfo.Comm,
 		FuncName:     mapInfo.MapName,
 		ResourceID:   mapInfo.MapID,
 		RV:           ResourceVersion{Version: event.Rv.Version, Timestamp: event.Rv.Timestamp},
@@ -531,11 +534,20 @@ func (i *BPFInformer) handleMapEvent(eventType uint32, data []byte) error {
 	return nil
 }
 
-func getMapIDFromFD(fd int) (uint32, error) {
-	info, err := GetMapInfoByFD(fd)
-	if err != nil {
-		return 0, fmt.Errorf("error creating map info: %w", err)
+func GetMapIDByFD(fd int) (uint32, error) {
+	var lastErr error
+	// 设置最大重试次数
+	maxRetries := 10
+
+	for i := 0; i < maxRetries; i++ {
+		info, err := GetMapInfoByFD(fd)
+		if err == nil {
+			return info.ID, nil
+		}
+
+		lastErr = err
 	}
 
-	return info.ID, nil
+	// 所有重试都失败了
+	return 0, fmt.Errorf("failed to get map ID after %d attempts: %w", maxRetries, lastErr)
 }
