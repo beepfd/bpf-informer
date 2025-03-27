@@ -15,7 +15,6 @@ import (
 
 	loader "github.com/cen-ngc5139/BeePF/loader/lib/src/cli"
 	"github.com/cen-ngc5139/BeePF/loader/lib/src/meta"
-	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/cilium/ebpf/rlimit"
 	"go.uber.org/zap"
@@ -109,6 +108,10 @@ func NewBPFInformer(objectPath string, logger *zap.Logger) (*BPFInformer, error)
 				},
 				"pid_prog_states": {
 					Name:          "map_states",
+					ExportHandler: &SkipHandler{},
+				},
+				"stack_traces": {
+					Name:          "stack_traces",
 					ExportHandler: &SkipHandler{},
 				},
 			},
@@ -463,15 +466,6 @@ func (i *BPFInformer) handleMapEvent(eventType uint32, data []byte) error {
 		UpdatedAt: now,
 	}
 
-	if mapInfo.FD > 0 && mapInfo.MapID == 0 {
-		mapID, err := getMapIDFromFD(mapInfo.FD)
-		if err != nil {
-			i.logger.Error("Failed to get map id from fd", zap.Error(err))
-		}
-
-		mapInfo.MapID = mapID
-	}
-
 	var eventTypeStr string
 	var action func(string, uint32, interface{})
 
@@ -499,6 +493,15 @@ func (i *BPFInformer) handleMapEvent(eventType uint32, data []byte) error {
 	// 执行存储操作
 	if action != nil {
 		action(ResourceTypeMap, event.State.Pid, mapInfo)
+	}
+
+	if mapInfo.FD > 0 && mapInfo.MapID == 0 {
+		mapID, err := getMapIDFromFD(mapInfo.FD)
+		if err != nil {
+			i.logger.Error("Failed to get map id from fd", zap.Int("fd", mapInfo.FD), zap.Error(err))
+		}
+
+		mapInfo.MapID = mapID
 	}
 
 	// 创建事件对象
@@ -529,20 +532,10 @@ func (i *BPFInformer) handleMapEvent(eventType uint32, data []byte) error {
 }
 
 func getMapIDFromFD(fd int) (uint32, error) {
-	mapFromFD, err := ebpf.NewMapFromFD(fd)
+	info, err := GetMapInfoByFD(fd)
 	if err != nil {
 		return 0, fmt.Errorf("error creating map info: %w", err)
 	}
 
-	info, err := mapFromFD.Info()
-	if err != nil {
-		return 0, fmt.Errorf("error getting map info: %w", err)
-	}
-
-	mapID, ok := info.ID()
-	if !ok {
-		return 0, fmt.Errorf("error getting map id: %w", err)
-	}
-
-	return uint32(mapID), nil
+	return info.ID, nil
 }

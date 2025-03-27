@@ -115,14 +115,29 @@ struct
     __type(value, struct bpf_map_state);
 } pid_map_states SEC(".maps");
 
+struct map_create_key
+{
+    __u64 pid_tgid;
+    __u32 stack_id;
+};
+
 // 创建临时存储表记录 map_create 调用信息
 struct
 {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1024);
-    __type(key, __u64); // 使用 pid + tgid 作为键
+    __type(key, struct map_create_key);
     __type(value, struct bpf_map_state);
 } map_create_calls SEC(".maps");
+
+typedef u64 stack[100];
+struct
+{
+    __uint(type, BPF_MAP_TYPE_STACK_TRACE);
+    __type(key, u32);
+    __type(value, stack);
+    __uint(max_entries, 1 << 14);
+} stack_traces SEC(".maps");
 
 // 辅助函数：获取并递增全局版本号
 static __always_inline __u64 get_next_version(void)
@@ -359,6 +374,18 @@ struct bpf_map_attr
     __u32 btf_vmlinux_value_type_id;
 };
 
+static __always_inline int is_map_name_match(const char *name, const char *target, int max_len)
+{
+    for (int i = 0; i < max_len; i++)
+    {
+        if (name[i] != target[i])
+            return 0;
+        if (name[i] == '\0')
+            return 1;
+    }
+    return 1;
+}
+
 // 监控 map 创建
 SEC("kprobe/map_create")
 int BPF_KPROBE(trace_kprobe_map_create)
@@ -367,6 +394,13 @@ int BPF_KPROBE(trace_kprobe_map_create)
     __u32 pid = pid_tgid >> 32;
     char comm[16];
     bpf_get_current_comm(&comm, sizeof(comm));
+
+    // 获取当前栈帧
+    __u32 stack_id = bpf_get_stackid(ctx, &stack_traces, BPF_F_USER_STACK | BPF_F_FAST_STACK_CMP);
+
+    struct map_create_key key = {0};
+    key.pid_tgid = pid_tgid;
+    key.stack_id = stack_id;
 
     void *attr = (void *)PT_REGS_PARM1(ctx);
     struct bpf_map_attr bpf_attr;
@@ -380,6 +414,18 @@ int BPF_KPROBE(trace_kprobe_map_create)
 
     char map_name[16];
     bpf_probe_read_kernel(&map_name, sizeof(map_name), &bpf_attr.map_name);
+    if (map_name[0] == '\0')
+    {
+        bpf_printk("map_name is empty: pid=%u comm=%s\n", pid, comm);
+        return 0;
+    }
+
+    if (is_map_name_match(map_name, "feature_test", sizeof(map_name)) ||
+        is_map_name_match(map_name, ".test", sizeof(map_name)))
+    {
+        bpf_printk("skip map_create: pid=%u comm=%s map_name=%s\n", pid, comm, map_name);
+        return 0;
+    }
 
     // 创建 map 状态结构
     struct bpf_map_state map_state = {0};
@@ -390,9 +436,9 @@ int BPF_KPROBE(trace_kprobe_map_create)
     __builtin_memcpy(map_state.map_name, map_name, sizeof(map_name));
 
     // 存储调用信息，以便在 kretprobe 中使用
-    bpf_map_update_elem(&map_create_calls, &pid_tgid, &map_state, BPF_ANY);
+    bpf_map_update_elem(&map_create_calls, &key, &map_state, BPF_ANY);
 
-    bpf_printk("map_create: pid=%u comm=%s map_name=%s rv=%llu\n",
+    bpf_printk("kprobe map_create: pid=%u comm=%s map_name=%s rv=%llu\n",
                pid, comm, map_name, map_state.rv.version);
 
     return 0;
@@ -401,17 +447,22 @@ int BPF_KPROBE(trace_kprobe_map_create)
 SEC("kretprobe/map_create")
 int BPF_KRETPROBE(trace_kretprobe_map_create, int fd)
 {
+    // todo: 需要优化，当前的 map_create 调用信息只存储了 pid_tgid，需要添加 map 信息
     // 获取当前进程标识
     __u64 pid_tgid = bpf_get_current_pid_tgid();
     __u32 pid = pid_tgid >> 32;
+    __u32 stack_id = bpf_get_stackid(ctx, &stack_traces, BPF_F_USER_STACK | BPF_F_FAST_STACK_CMP);
+    struct map_create_key map_create_key = {0};
+    map_create_key.pid_tgid = pid_tgid;
+    map_create_key.stack_id = stack_id;
 
     // 查找对应的调用信息
-    struct bpf_map_state *map_state = bpf_map_lookup_elem(&map_create_calls, &pid_tgid);
+    struct bpf_map_state *map_state = bpf_map_lookup_elem(&map_create_calls, &map_create_key);
     if (!map_state || fd < 0)
     {
         bpf_printk("fail to get map_create_info: pid=%u fd=%d\n", pid, fd);
         // 清理临时存储
-        bpf_map_delete_elem(&map_create_calls, &pid_tgid);
+        bpf_map_delete_elem(&map_create_calls, &map_create_key);
         return 0;
     }
 
@@ -444,7 +495,8 @@ int BPF_KRETPROBE(trace_kretprobe_map_create, int fd)
     // 更新状态
     bpf_map_update_elem(&pid_map_states, &key, map_state, BPF_ANY);
 
-    bpf_printk("map_create: pid=%u fd=%d map_name=%s \n", pid, fd, map_state->map_name);
+    bpf_printk("kretprobe map_create: pid=%u fd=%d map_name=%s rv=%llu\n",
+               pid, fd, map_state->map_name, map_state->rv.version);
 
     return 0;
 }
