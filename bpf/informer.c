@@ -96,6 +96,8 @@ struct pid_func_key
 {
     __u32 pid;
     char func_name[16]; // 函数名最大长度
+    u8 tag[8];          // 标签，用于区分不同的函数
+    u64 load_time;
 };
 
 // 定义 pid + funcname 的映射
@@ -250,6 +252,8 @@ int BPF_KPROBE(trace_bpf_prog_load)
     struct pid_func_key key = {0};
     key.pid = state.pid;
     __builtin_memcpy(key.func_name, func_name, sizeof(func_name));
+    bpf_probe_read_kernel(&key.tag, sizeof(key.tag), &prog->tag);
+    bpf_probe_read_kernel(&key.load_time, sizeof(key.load_time), &aux->load_time);
 
     // 检查是否存在，确定是ADD还是UPDATE
     struct bpf_prog_state *existing;
@@ -319,6 +323,9 @@ int BPF_KPROBE(trace_bpf_prog_release)
     struct pid_func_key key = {0};
     key.pid = pid;
     __builtin_memcpy(key.func_name, func_name, sizeof(func_name));
+    bpf_probe_read_kernel(&key.tag, sizeof(key.tag), &prog->tag);
+    bpf_probe_read_kernel(&key.load_time, sizeof(key.load_time), &aux->load_time);
+
     state = bpf_map_lookup_elem(&pid_prog_states, &key);
     if (!state)
     {
