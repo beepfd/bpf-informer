@@ -47,6 +47,10 @@ func (c *BPFClient) Stop() {
 	c.informer.Stop()
 }
 
+func (c *BPFClient) List() ([]interface{}, []interface{}, informer.ResourceVersion) {
+	return c.informer.List()
+}
+
 // AddEventHandler 添加事件处理器
 func (c *BPFClient) AddEventHandler(handler informer.EventHandler) {
 	c.handlers = append(c.handlers, handler)

@@ -142,6 +142,11 @@ func NewBPFInformer(objectPath string, logger *zap.Logger) (*BPFInformer, error)
 
 // Start 启动 Informer
 func (i *BPFInformer) Start() error {
+	// 加载初始状态
+	if err := i.loadInitialState(); err != nil {
+		i.logger.Warn("Failed to load initial state", zap.Error(err))
+	}
+
 	i.wg.Add(1)
 	go i.processEvents()
 	if err := i.l.Start(); err != nil {
@@ -297,10 +302,6 @@ func (i *BPFInformer) loadInitialState() error {
 // processEvents 处理 eBPF 事件
 func (i *BPFInformer) processEvents() {
 	defer i.wg.Done()
-	// 加载初始状态
-	if err := i.loadInitialState(); err != nil {
-		i.logger.Warn("Failed to load initial state", zap.Error(err))
-	}
 
 	// 获取环形缓冲区
 	events, ok := i.l.Collection.Maps["events"]
