@@ -2,7 +2,7 @@ package informer
 
 import "testing"
 
-func TestKernelHigher56_GetFD(t *testing.T) {
+func TestKernelLower56_GetFD(t *testing.T) {
 	type fields struct {
 		PidFD PidFD
 	}
@@ -12,11 +12,19 @@ func TestKernelHigher56_GetFD(t *testing.T) {
 		want    int
 		wantErr bool
 	}{
-		// TODO: Add test cases.
+		{
+			name: "test",
+			fields: fields{
+				PidFD: PidFD{
+					TargetPID: 1215083,
+					TargetFD:  8,
+				},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			k := &KernelHigher56{
+			k := &KernelLower56{
 				PidFD: tt.fields.PidFD,
 			}
 			got, err := k.GetFD()

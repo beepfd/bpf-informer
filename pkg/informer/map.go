@@ -12,6 +12,8 @@ import (
 const (
 	BPF_OBJ_GET_INFO_BY_FD = 15
 	SYS_BPF                = 321 // x86_64 上的 BPF 系统调用号
+	sys_pidfd_open         = 434 // x86_64 系统上 pidfd_open 的系统调用号
+	sys_pidfd_getfd        = 438 // x86_64 系统上 pidfd_getfd 的系统调用号
 )
 
 // BPF map 信息结构
@@ -29,29 +31,14 @@ type MapInfo struct {
 	// 更多字段取决于内核版本
 }
 
-const (
-	sys_pidfd_send_signal = 424
-	sys_pidfd_open        = 434
-	sys_pidfd_getfd       = 438
-)
-
 func GetMapInfoByPidFD(pid int, fd int) (*MapInfo, error) {
-	pidfd, _, errno := syscall.Syscall(sys_pidfd_open, uintptr(pid), 0, 0)
-	if errno != 0 {
-		return nil, errno
+	pidfd := NewPidFD(pid, fd)
+	newfd, err := pidfd.GetFD()
+	if err != nil {
+		return nil, err
 	}
-	defer syscall.Close(int(pidfd))
+	defer pidfd.Close()
 
-	newfd, _, errno := syscall.Syscall(sys_pidfd_getfd, uintptr(pidfd), uintptr(fd), uintptr(0))
-	if errno != 0 {
-		return nil, errno
-	}
-
-	defer syscall.Close(int(newfd))
-
-	fmt.Printf("pid:%d, fd:%d, newfd:%d\n", pid, fd, newfd)
-
-	// 4. 使用 BPF_OBJ_GET_INFO_BY_FD 获取详细信息
 	info := &MapInfo{}
 	infoLen := uint32(unsafe.Sizeof(*info))
 
@@ -65,7 +52,7 @@ func GetMapInfoByPidFD(pid int, fd int) (*MapInfo, error) {
 	infoAttr.InfoLen = infoLen
 	infoAttr.Info = uint64(uintptr(unsafe.Pointer(info)))
 
-	_, _, errno = syscall.Syscall(
+	_, _, errno := syscall.Syscall(
 		unix.SYS_BPF,
 		unix.BPF_OBJ_GET_INFO_BY_FD,
 		uintptr(unsafe.Pointer(&infoAttr)),
