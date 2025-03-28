@@ -118,18 +118,12 @@ struct
     __type(value, struct bpf_map_state);
 } pid_map_states SEC(".maps");
 
-struct map_create_key
-{
-    __u64 pid_tgid;
-    __u32 stack_id;
-};
-
 // 创建临时存储表记录 map_create 调用信息
 struct
 {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 1024);
-    __type(key, struct map_create_key);
+    __type(key, __u32);
     __type(value, struct bpf_map_state);
 } map_create_calls SEC(".maps");
 
@@ -404,13 +398,6 @@ int BPF_KPROBE(trace_kprobe_map_create)
     char comm[16];
     bpf_get_current_comm(&comm, sizeof(comm));
 
-    // 获取当前栈帧
-    __u32 stack_id = bpf_get_stackid(ctx, &stack_traces, BPF_F_USER_STACK | BPF_F_FAST_STACK_CMP);
-
-    struct map_create_key key = {0};
-    key.pid_tgid = pid_tgid;
-    key.stack_id = stack_id;
-
     void *attr = (void *)PT_REGS_PARM1(ctx);
     struct bpf_map_attr bpf_attr;
 
@@ -444,8 +431,9 @@ int BPF_KPROBE(trace_kprobe_map_create)
     map_state.pid = pid;
     __builtin_memcpy(map_state.map_name, map_name, sizeof(map_name));
 
+    __u32 zero = 0;
     // 存储调用信息，以便在 kretprobe 中使用
-    bpf_map_update_elem(&map_create_calls, &key, &map_state, BPF_ANY);
+    bpf_map_update_elem(&map_create_calls, &zero, &map_state, BPF_ANY);
 
     bpf_printk("kprobe map_create: pid=%u comm=%s map_name=%s rv=%llu\n",
                pid, comm, map_name, map_state.rv.version);
@@ -456,22 +444,19 @@ int BPF_KPROBE(trace_kprobe_map_create)
 SEC("kretprobe/map_create")
 int BPF_KRETPROBE(trace_kretprobe_map_create, int fd)
 {
-    // todo: 需要优化，当前的 map_create 调用信息只存储了 pid_tgid，需要添加 map 信息
     // 获取当前进程标识
     __u64 pid_tgid = bpf_get_current_pid_tgid();
     __u32 pid = pid_tgid >> 32;
-    __u32 stack_id = bpf_get_stackid(ctx, &stack_traces, BPF_F_USER_STACK | BPF_F_FAST_STACK_CMP);
-    struct map_create_key map_create_key = {0};
-    map_create_key.pid_tgid = pid_tgid;
-    map_create_key.stack_id = stack_id;
+
+    __u32 zero = 0;
 
     // 查找对应的调用信息
-    struct bpf_map_state *map_state = bpf_map_lookup_elem(&map_create_calls, &map_create_key);
+    struct bpf_map_state *map_state = bpf_map_lookup_elem(&map_create_calls, &zero);
     if (!map_state || fd < 0)
     {
         bpf_printk("fail to get map_create_info: pid=%u fd=%d\n", pid, fd);
         // 清理临时存储
-        bpf_map_delete_elem(&map_create_calls, &map_create_key);
+        bpf_map_delete_elem(&map_create_calls, &zero);
         return 0;
     }
 
@@ -487,6 +472,7 @@ int BPF_KRETPROBE(trace_kretprobe_map_create, int fd)
 
     // 更新状态
     bpf_map_update_elem(&pid_map_states, &key, map_state, BPF_ANY);
+    bpf_map_delete_elem(&map_create_calls, &zero);
 
     bpf_printk("kretprobe map_create: pid=%u fd=%d map_name=%s rv=%llu\n",
                pid, fd, map_state->map_name, map_state->rv.version);
@@ -534,6 +520,8 @@ int BPF_KPROBE(trace_bpf_map_release)
         bpf_printk("fail to get map_state from pid_map_states: pid=%u comm=%s map_name=%s\n", pid, comm, map_name);
         return 0;
     }
+
+    map_state->map_id = map_id;
 
     // 制作副本用于发送事件
     struct bpf_map_state *state_copy = map_state;

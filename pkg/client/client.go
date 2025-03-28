@@ -91,6 +91,7 @@ func (c *BPFClient) runListAndWatch() {
 				zap.String("type", event.Type),
 				zap.String("resource_type", event.ResourceType),
 				zap.Uint32("pid", event.Pid),
+				zap.String("comm", event.Comm),
 				zap.String("func_name", event.FuncName),
 				zap.Uint32("resource_id", event.ResourceID),
 				zap.Uint64("resource_version", event.RV.Version))

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 // 定义常量
@@ -27,39 +29,51 @@ type MapInfo struct {
 	// 更多字段取决于内核版本
 }
 
-// BPF 系统调用的参数结构
-type bpfAttr struct {
-	BpfFD   uint32
-	InfoLen uint32
-	Info    uint64
-}
+const (
+	sys_pidfd_send_signal = 424
+	sys_pidfd_open        = 434
+	sys_pidfd_getfd       = 438
+)
 
-// 从 fd 获取 BPF map 信息
-func GetMapInfoByFD(fd int) (*MapInfo, error) {
-	// 创建用于接收信息的结构
+func GetMapInfoByPidFD(pid int, fd int) (*MapInfo, error) {
+	pidfd, _, errno := syscall.Syscall(sys_pidfd_open, uintptr(pid), 0, 0)
+	if errno != 0 {
+		return nil, errno
+	}
+	defer syscall.Close(int(pidfd))
+
+	newfd, _, errno := syscall.Syscall(sys_pidfd_getfd, uintptr(pidfd), uintptr(fd), uintptr(0))
+	if errno != 0 {
+		return nil, errno
+	}
+
+	defer syscall.Close(int(newfd))
+
+	fmt.Printf("pid:%d, fd:%d, newfd:%d\n", pid, fd, newfd)
+
+	// 4. 使用 BPF_OBJ_GET_INFO_BY_FD 获取详细信息
 	info := &MapInfo{}
 	infoLen := uint32(unsafe.Sizeof(*info))
 
-	// 准备系统调用参数
-	var attr struct {
-		Info bpfAttr
-		Pad  [24]byte // 确保结构体大小足够
+	var infoAttr struct {
+		BpfFD   uint32
+		InfoLen uint32
+		Info    uint64
 	}
 
-	attr.Info.BpfFD = uint32(fd)
-	attr.Info.InfoLen = infoLen
-	attr.Info.Info = uint64(uintptr(unsafe.Pointer(info)))
+	infoAttr.BpfFD = uint32(newfd)
+	infoAttr.InfoLen = infoLen
+	infoAttr.Info = uint64(uintptr(unsafe.Pointer(info)))
 
-	// 执行系统调用
-	_, _, err := syscall.Syscall(
-		SYS_BPF,
-		uintptr(BPF_OBJ_GET_INFO_BY_FD),
-		uintptr(unsafe.Pointer(&attr)),
-		unsafe.Sizeof(attr),
+	_, _, errno = syscall.Syscall(
+		unix.SYS_BPF,
+		unix.BPF_OBJ_GET_INFO_BY_FD,
+		uintptr(unsafe.Pointer(&infoAttr)),
+		unsafe.Sizeof(infoAttr),
 	)
 
-	if err != 0 {
-		return nil, fmt.Errorf("BPF_OBJ_GET_INFO_BY_FD failed: %v", err)
+	if errno != 0 {
+		return nil, fmt.Errorf("BPF_OBJ_GET_INFO_BY_FD 失败: %v", errno)
 	}
 
 	return info, nil

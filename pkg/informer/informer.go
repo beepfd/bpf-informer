@@ -498,12 +498,12 @@ func (i *BPFInformer) handleMapEvent(eventType uint32, data []byte) error {
 	}
 
 	if mapInfo.FD > 0 && mapInfo.MapID == 0 {
-		mapID, err := GetMapIDByFD(mapInfo.FD)
+		info, err := GetMapInfoByPidFD(int(mapInfo.PID), int(mapInfo.FD))
 		if err != nil {
 			i.logger.Error("Failed to get map id from fd", zap.Int("fd", mapInfo.FD), zap.Error(err))
 		}
 
-		mapInfo.MapID = mapID
+		mapInfo.MapID = info.ID
 	}
 
 	// 创建事件对象
@@ -532,22 +532,4 @@ func (i *BPFInformer) handleMapEvent(eventType uint32, data []byte) error {
 	}
 
 	return nil
-}
-
-func GetMapIDByFD(fd int) (uint32, error) {
-	var lastErr error
-	// 设置最大重试次数
-	maxRetries := 10
-
-	for i := 0; i < maxRetries; i++ {
-		info, err := GetMapInfoByFD(fd)
-		if err == nil {
-			return info.ID, nil
-		}
-
-		lastErr = err
-	}
-
-	// 所有重试都失败了
-	return 0, fmt.Errorf("failed to get map ID after %d attempts: %w", maxRetries, lastErr)
 }
