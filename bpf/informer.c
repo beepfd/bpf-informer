@@ -174,7 +174,7 @@ static int send_event(__u32 event_type, struct bpf_prog_state *state)
 
     // 填充事件信息
     event->event_type = event_type;
-    __builtin_memcpy(&event->state, state, sizeof(*state));
+    bpf_probe_read_kernel(&event->state, sizeof(*state), state);
     event->rv = state->rv;
 
     // 提交事件
@@ -200,7 +200,7 @@ static int send_map_event(__u32 event_type, struct bpf_map_state *state)
 
     // 填充事件信息
     event->event_type = event_type;
-    __builtin_memcpy(&event->state, state, sizeof(*state));
+    bpf_probe_read_kernel(&event->state, sizeof(*state), state);
     event->rv = state->rv;
 
     // 提交事件
@@ -241,11 +241,23 @@ int BPF_KPROBE(trace_bpf_prog_load)
 
     char func_name[16];
     bpf_probe_read_kernel(&func_name, sizeof(func_name), &aux->name);
-    __builtin_memcpy(state.func_name, func_name, sizeof(func_name));
+
+// 使用循环复制替代 __builtin_memcpy
+#pragma unroll
+    for (int i = 0; i < sizeof(func_name); i++)
+    {
+        state.func_name[i] = func_name[i];
+    }
 
     struct pid_func_key key = {0};
     key.pid = state.pid;
-    __builtin_memcpy(key.func_name, func_name, sizeof(func_name));
+
+// 使用循环复制替代 __builtin_memcpy
+#pragma unroll
+    for (int i = 0; i < sizeof(func_name); i++)
+    {
+        key.func_name[i] = func_name[i];
+    }
     bpf_probe_read_kernel(&key.tag, sizeof(key.tag), &prog->tag);
     bpf_probe_read_kernel(&key.load_time, sizeof(key.load_time), &aux->load_time);
 
@@ -273,9 +285,8 @@ int BPF_KPROBE(trace_bpf_prog_load)
     bpf_map_update_elem(&pid_prog_states, &key, &state, BPF_ANY);
 
     // 打印基本信息
-    bpf_printk("BPF program %s: id=%u pid=%d comm=%s func_name=%s rv=%llu\n",
-               event_type == EVENT_TYPE_ADD ? "loaded" : "updated",
-               state.prog_id, state.pid, state.comm, func_name, state.rv.version);
+    // bpf_printk("BPF program: id=%u pid=%d comm=%s func_name=%s\n",
+    //            state.prog_id, state.pid, state.comm, func_name);
 
     return 0;
 }
@@ -316,7 +327,13 @@ int BPF_KPROBE(trace_bpf_prog_release)
     struct bpf_prog_state *state;
     struct pid_func_key key = {0};
     key.pid = pid;
-    __builtin_memcpy(key.func_name, func_name, sizeof(func_name));
+
+// 使用循环复制替代 __builtin_memcpy
+#pragma unroll
+    for (int i = 0; i < sizeof(func_name); i++)
+    {
+        key.func_name[i] = func_name[i];
+    }
     bpf_probe_read_kernel(&key.tag, sizeof(key.tag), &prog->tag);
     bpf_probe_read_kernel(&key.load_time, sizeof(key.load_time), &aux->load_time);
 
@@ -353,8 +370,6 @@ int BPF_KPROBE(trace_bpf_prog_release)
         // 从map中删除
         bpf_map_delete_elem(&prog_states, &state->prog_id);
         bpf_map_delete_elem(&pid_prog_states, &key);
-
-        bpf_printk("BPF program released: id=%u rv=%llu\n", state->prog_id, updated_state.rv.version);
     }
 
     return 0;
@@ -427,16 +442,29 @@ int BPF_KPROBE(trace_kprobe_map_create)
     struct bpf_map_state map_state = {0};
     map_state.load_time = bpf_ktime_get_ns();
     map_state.rv.timestamp = map_state.load_time;
-    __builtin_memcpy(map_state.comm, comm, sizeof(comm));
+
+// 使用循环复制替代 __builtin_memcpy
+#pragma unroll
+    for (int i = 0; i < sizeof(comm); i++)
+    {
+        map_state.comm[i] = comm[i];
+    }
+
     map_state.pid = pid;
-    __builtin_memcpy(map_state.map_name, map_name, sizeof(map_name));
+
+// 使用循环复制替代 __builtin_memcpy
+#pragma unroll
+    for (int i = 0; i < sizeof(map_name); i++)
+    {
+        map_state.map_name[i] = map_name[i];
+    }
 
     __u32 zero = 0;
     // 存储调用信息，以便在 kretprobe 中使用
     bpf_map_update_elem(&map_create_calls, &zero, &map_state, BPF_ANY);
 
-    bpf_printk("kprobe map_create: pid=%u comm=%s map_name=%s rv=%llu\n",
-               pid, comm, map_name, map_state.rv.version);
+    bpf_printk("kprobe map_create: pid=%u comm=%s map_name=%s\n",
+               pid, comm, map_name);
 
     return 0;
 }
@@ -465,7 +493,13 @@ int BPF_KRETPROBE(trace_kretprobe_map_create, int fd)
     // 创建 map 状态结构 key
     struct pid_func_key key = {0};
     key.pid = pid;
-    __builtin_memcpy(key.func_name, map_state->map_name, sizeof(map_state->map_name));
+
+// 使用循环复制替代 __builtin_memcpy
+#pragma unroll
+    for (int i = 0; i < sizeof(map_state->map_name); i++)
+    {
+        key.func_name[i] = map_state->map_name[i];
+    }
 
     // 发送事件
     send_map_event(EVENT_TYPE_MAP_ADD, map_state);
@@ -474,8 +508,8 @@ int BPF_KRETPROBE(trace_kretprobe_map_create, int fd)
     bpf_map_update_elem(&pid_map_states, &key, map_state, BPF_ANY);
     bpf_map_delete_elem(&map_create_calls, &zero);
 
-    bpf_printk("kretprobe map_create: pid=%u fd=%d map_name=%s rv=%llu\n",
-               pid, fd, map_state->map_name, map_state->rv.version);
+    bpf_printk("kretprobe map_create: pid=%u fd=%d map_name=%s\n",
+               pid, fd, map_state->map_name);
 
     return 0;
 }
@@ -511,7 +545,13 @@ int BPF_KPROBE(trace_bpf_map_release)
 
     struct pid_func_key key = {0};
     key.pid = pid;
-    __builtin_memcpy(key.func_name, map_name, sizeof(map_name));
+
+// 使用循环复制替代 __builtin_memcpy
+#pragma unroll
+    for (int i = 0; i < sizeof(map_name); i++)
+    {
+        key.func_name[i] = map_name[i];
+    }
 
     struct bpf_map_state *map_state;
     map_state = bpf_map_lookup_elem(&pid_map_states, &key);
@@ -532,8 +572,8 @@ int BPF_KPROBE(trace_bpf_map_release)
     // 从map中删除状态
     bpf_map_delete_elem(&pid_map_states, &key);
 
-    bpf_printk("BPF map released: pid=%u comm=%s map_id=%u map_name=%s rv=%llu\n",
-               pid, comm, map_id, map_name, state_copy->rv.version);
+    // bpf_printk("BPF map released: pid=%u comm=%s map_id=%u map_name=%s\n",
+    //            pid, comm, map_id, map_name);
 
     return 0;
 }
