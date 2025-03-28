@@ -12,9 +12,9 @@ BPF Informer 是一个类似于 Kubernetes Informer 的 eBPF 监控工具，可�
 
 ## 系统要求
 
-- Linux 内核 4.7+ (推荐)
+- Linux 内核 5.10+ (推荐)
 - Clang 和 LLVM
-- Go 1.16+
+- Go 1.22+
 - 内核头文件
 - libbpf
 
