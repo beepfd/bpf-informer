@@ -127,15 +127,6 @@ struct
     __type(value, struct bpf_map_state);
 } map_create_calls SEC(".maps");
 
-typedef u64 stack[100];
-struct
-{
-    __uint(type, BPF_MAP_TYPE_STACK_TRACE);
-    __type(key, u32);
-    __type(value, stack);
-    __uint(max_entries, 1 << 14);
-} stack_traces SEC(".maps");
-
 // 辅助函数：获取并递增全局版本号
 static __always_inline __u64 get_next_version(void)
 {

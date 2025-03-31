@@ -7,6 +7,7 @@ import (
 
 	"github.com/cen-ngc5139/bpf-informer/pkg/client"
 	"github.com/cen-ngc5139/bpf-informer/pkg/informer"
+	server "github.com/cen-ngc5139/bpf-informer/router"
 	"go.uber.org/zap"
 )
 
@@ -33,6 +34,9 @@ func main() {
 	}
 
 	defer c.Stop()
+
+	server := server.NewServer(c)
+	server.Start()
 
 	// 等待退出信号
 	sigChan := make(chan os.Signal, 1)

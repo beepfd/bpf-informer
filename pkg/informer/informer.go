@@ -163,7 +163,7 @@ func (i *BPFInformer) Start() error {
 // Stop 停止 Informer
 func (i *BPFInformer) Stop() {
 	close(i.stopChan)
-	i.wg.Wait()
+	// i.wg.Wait()
 	close(i.eventChan)
 	i.l.Stop()
 }
