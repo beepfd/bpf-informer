@@ -17,7 +17,7 @@ type BPFClient struct {
 }
 
 // NewBPFClient 创建新的 BPF 客户端
-func NewBPFClient(bpfObjPath string, logger *zap.Logger) (*BPFClient, error) {
+func NewBPFClient(bpfObjPath string, logger *zap.Logger, handlers []informer.EventHandler) (*BPFClient, error) {
 	inf, err := informer.NewBPFInformer(bpfObjPath, logger)
 	if err != nil {
 		return nil, err
@@ -26,14 +26,14 @@ func NewBPFClient(bpfObjPath string, logger *zap.Logger) (*BPFClient, error) {
 	return &BPFClient{
 		informer: inf,
 		logger:   logger,
-		handlers: make([]informer.EventHandler, 0),
+		handlers: handlers,
 	}, nil
 }
 
 // Start 启动客户端
 func (c *BPFClient) Start() error {
 	if err := c.informer.Start(); err != nil {
-		return err
+		return fmt.Errorf("start informer failed: %w", err)
 	}
 
 	// 执行初始化的 list 操作

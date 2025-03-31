@@ -124,11 +124,6 @@ func NewBPFInformer(objectPath string, logger *zap.Logger) (*BPFInformer, error)
 		return nil, fmt.Errorf("init BPF loader failed: %w", err)
 	}
 
-	err = l.Load()
-	if err != nil {
-		return nil, fmt.Errorf("load BPF program failed: %w", err)
-	}
-
 	return &BPFInformer{
 		store:         NewInMemoryStore(),
 		l:             l,
@@ -142,16 +137,17 @@ func NewBPFInformer(objectPath string, logger *zap.Logger) (*BPFInformer, error)
 
 // Start 启动 Informer
 func (i *BPFInformer) Start() error {
+	if err := i.l.Load(); err != nil {
+		return fmt.Errorf("load BPF program failed: %w", err)
+	}
+
 	// 加载初始状态
 	if err := i.loadInitialState(); err != nil {
-		i.logger.Warn("Failed to load initial state", zap.Error(err))
+		return fmt.Errorf("load initial state failed: %w", err)
 	}
 
 	i.wg.Add(1)
 	go i.processEvents()
-	if err := i.l.Start(); err != nil {
-		return fmt.Errorf("start BPF loader failed: %w", err)
-	}
 
 	if err := i.l.Stats(); err != nil {
 		return fmt.Errorf("stats BPF loader failed: %w", err)
@@ -254,6 +250,7 @@ func (i *BPFInformer) addEventToBuffer(event Event) {
 
 // loadInitialState 加载初始状态
 func (i *BPFInformer) loadInitialState() error {
+	i.logger.Info("Loading initial state...")
 	progMap, err := topology.ListAllPrograms()
 	if err != nil {
 		i.logger.Warn("Fail to list all maps", zap.Error(err))
@@ -301,6 +298,7 @@ func (i *BPFInformer) loadInitialState() error {
 
 // processEvents 处理 eBPF 事件
 func (i *BPFInformer) processEvents() {
+	i.logger.Info("Processing events...")
 	defer i.wg.Done()
 
 	// 获取环形缓冲区

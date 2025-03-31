@@ -6,6 +6,7 @@ import (
 	"syscall"
 
 	"github.com/cen-ngc5139/bpf-informer/pkg/client"
+	"github.com/cen-ngc5139/bpf-informer/pkg/informer"
 	"go.uber.org/zap"
 )
 
@@ -20,7 +21,8 @@ func main() {
 	}
 	defer logger.Sync()
 
-	c, err := client.NewBPFClient("./binary/informer_x86_bpfel.o", logger)
+	c, err := client.NewBPFClient("./binary/informer_x86_bpfel.o", logger,
+		[]informer.EventHandler{client.NewDefaultEventHandler(logger)})
 	if err != nil {
 		panic("初始化 BPF 客户端失败: " + err.Error())
 	}
