@@ -9,6 +9,7 @@ BPF Informer 是一个类似于 Kubernetes Informer 的 eBPF 监控工具，可�
 - **缓冲区机制**：使用 RingBuffer 高效传输事件，并缓存历史事件
 - **双重监控机制**：同时支持 kprobe 和 tracepoint 两种挂载方式
 - **类 K8s 客户端接口**：提供熟悉的 list/watch 接口和事件处理机制
+- **REST API**：提供 HTTP 接口获取 BPF 程序和映射信息
 
 ## 系统要求
 
@@ -33,20 +34,22 @@ sudo apt-get install libbpf-dev
 TARGET_GOARCH=amd64 go generate
 
 # 编译项目
-go build -o bpf-informer
+make build
 
 # 运行（需要 root 权限）
-sudo ./bpf-informer
+sudo ./informer
 ```
 
-## 命令行选项
+## Web API 接口
+
+BPF Informer 提供了 RESTful API 接口，允许通过 HTTP 请求获取 BPF 程序和映射信息：
 
 ```
--obj string
-    BPF 对象文件路径 (默认 "./binary/informer_x86_bpfel.o")
--debug
-    启用调试日志
+GET /api/v1/bpf/programs - 获取所有 BPF 程序
+GET /api/v1/bpf/maps - 获取所有 BPF 映射
 ```
+
+默认监听端口为 8080，例如：`http://localhost:8080/api/v1/bpf/programs`
 
 ## 项目结构
 
@@ -55,6 +58,8 @@ sudo ./bpf-informer
 - **pkg/**：Go 代码
   - **informer/**：核心 Informer 实现
   - **client/**：客户端和事件处理器
+- **router/**：Web API 服务实现
+- **binary/**：生成的 eBPF 对象文件
 - **main.go**：程序入口
 
 ## 工作原理
@@ -79,7 +84,7 @@ sudo ./bpf-informer
 
 ```go
 // 创建客户端
-bpfClient, err := client.NewBPFClient("./binary/informer_x86_bpfel.o", logger)
+bpfClient, err := client.NewBPFClient(binary.ExportRaw(), logger, []informer.EventHandler{})
 if err != nil {
     log.Fatal(err)
 }
@@ -88,7 +93,10 @@ if err != nil {
 bpfClient.AddEventHandler(&MyEventHandler{})
 
 // 启动客户端
-bpfClient.Start()
+err = bpfClient.Start()
+if err != nil {
+    log.Fatal(err)
+}
 defer bpfClient.Stop()
 
 // 自定义事件处理器
