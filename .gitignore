@@ -27,4 +27,4 @@ go.work.sum
 .vscode
 .idea
 
-binary
+binary/informer_*

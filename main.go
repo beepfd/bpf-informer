@@ -5,6 +5,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/cen-ngc5139/bpf-informer/binary"
 	"github.com/cen-ngc5139/bpf-informer/pkg/client"
 	"github.com/cen-ngc5139/bpf-informer/pkg/informer"
 	server "github.com/cen-ngc5139/bpf-informer/router"
@@ -22,7 +23,7 @@ func main() {
 	}
 	defer logger.Sync()
 
-	c, err := client.NewBPFClient("./binary/informer_x86_bpfel.o", logger,
+	c, err := client.NewBPFClient(binary.ExportRaw(), logger,
 		[]informer.EventHandler{client.NewDefaultEventHandler(logger)})
 	if err != nil {
 		panic("初始化 BPF 客户端失败: " + err.Error())

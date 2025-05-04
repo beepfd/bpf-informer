@@ -78,14 +78,14 @@ func (h *SkipHandler) HandleEvent(ctx *meta.UserContext, data *meta.ReceivedEven
 }
 
 // NewBPFInformer 创建新的 BPF Informer
-func NewBPFInformer(objectPath string, logger *zap.Logger) (*BPFInformer, error) {
+func NewBPFInformer(raw []byte, logger *zap.Logger) (*BPFInformer, error) {
 	// 提高 rlimit
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return nil, fmt.Errorf("remove memlock failed: %w", err)
 	}
 
 	config := &loader.Config{
-		ObjectPath:  objectPath,
+		ObjectBytes: raw,
 		Logger:      logger,
 		PollTimeout: 100 * time.Millisecond,
 		Properties: meta.Properties{

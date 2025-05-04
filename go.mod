@@ -1,9 +1,11 @@
 module github.com/cen-ngc5139/bpf-informer
 
-go 1.22.4
+go 1.23.0
+
+toolchain go1.23.8
 
 require (
-	github.com/cen-ngc5139/BeePF v0.0.1-rc16.0.20250321101349-c7ada51ceae8
+	github.com/cen-ngc5139/BeePF v0.0.1-rc16.0.20250425011904-6d1f49a5421d
 	github.com/cilium/ebpf v0.17.2
 	github.com/gin-contrib/pprof v1.5.2
 	github.com/gin-gonic/gin v1.10.0
@@ -24,6 +26,7 @@ require (
 	github.com/goccy/go-json v0.10.4 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.9 // indirect
+	github.com/knightsc/gapstone v4.0.1+incompatible // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect

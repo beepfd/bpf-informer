@@ -17,8 +17,8 @@ type BPFClient struct {
 }
 
 // NewBPFClient 创建新的 BPF 客户端
-func NewBPFClient(bpfObjPath string, logger *zap.Logger, handlers []informer.EventHandler) (*BPFClient, error) {
-	inf, err := informer.NewBPFInformer(bpfObjPath, logger)
+func NewBPFClient(raw []byte, logger *zap.Logger, handlers []informer.EventHandler) (*BPFClient, error) {
+	inf, err := informer.NewBPFInformer(raw, logger)
 	if err != nil {
 		return nil, err
 	}
