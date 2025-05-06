@@ -499,10 +499,10 @@ func (i *BPFInformer) handleMapEvent(eventType uint32, data []byte) error {
 	if mapInfo.FD > 0 && mapInfo.MapID == 0 {
 		info, err := GetMapInfoByPidFD(int(mapInfo.PID), int(mapInfo.FD))
 		if err != nil {
-			i.logger.Error("Failed to get map id from fd", zap.Int("fd", mapInfo.FD), zap.Error(err))
+			i.logger.Warn("Failed to get map id from fd", zap.Int("fd", mapInfo.FD), zap.Any("mapInfo", mapInfo), zap.Error(err))
+		} else {
+			mapInfo.MapID = info.ID
 		}
-
-		mapInfo.MapID = info.ID
 	}
 
 	// 创建事件对象
